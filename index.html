@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="C# 闯关式学习平台，从零基础到独立开发">
+    <title>C# 闯关</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%235b4cdb'/><text x='5' y='23' font-size='20' font-weight='800' fill='white'>C#</text></svg>">
+    <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+    <a href="#codeInput" class="skip-link">跳到编辑器</a>
+    <header class="topbar" role="banner">
+        <div class="topbar-left">
+            <div class="logo-box" aria-hidden="true"><span class="logo-icon">C</span><span class="logo-text">#</span></div>
+            <span class="lesson-title" id="lessonTitle">闯关学习</span>
+        </div>
+        <div class="topbar-center">
+            <div class="progress-track" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"><div class="progress-fill" id="progressFill"></div></div>
+            <span class="progress-text" id="progressText">0/0</span>
+        </div>
+        <div class="topbar-right">
+            <button class="icon-btn" id="btnPrev" aria-label="上一关" title="上一关 Alt+←">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <span class="step-indicator" id="stepIndicator" aria-live="polite">—</span>
+            <button class="icon-btn" id="btnNext" aria-label="下一关" title="下一关 Alt+→">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+            <div class="divider-v" aria-hidden="true"></div>
+            <button class="icon-btn" id="btnFocus" aria-label="专注模式" title="专注模式 F11">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+            </button>
+            <button class="icon-btn" id="btnTheme" aria-label="切换主题" title="切换主题">
+                <svg class="icon-sun" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                <svg class="icon-moon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <main class="workspace">
+        <aside class="sidebar" id="sidebar" role="navigation" aria-label="课程目录">
+            <div class="sidebar-header"><span>📖 课程目录</span></div>
+            <div class="sidebar-body" id="sidebarBody" role="list"></div>
+            <div class="sidebar-footer">
+                <button class="btn-reset-progress" id="btnResetProgress">⚠️ 重置进度</button>
+            </div>
+        </aside>
+
+        <section class="panel-center" id="panelCenter" role="region" aria-label="教程内容">
+            <div class="tutorial" id="tutorial"></div>
+            <!-- 答案面板：从中间右边缘滑出，覆盖整个右侧编辑区 -->
+            <aside class="answer-panel" id="answerPanel" aria-label="参考答案">
+                <div class="answer-header">
+                    <span>📖 参考答案</span>
+                    <button class="btn-close-answer" id="btnCloseAnswer" aria-label="关闭答案">✕</button>
+                </div>
+                <div class="answer-body">
+                    <pre class="answer-code" id="answerCode"></pre>
+                    <button class="btn-copy-answer" id="btnCopyAnswer">📋 复制到编辑器</button>
+                </div>
+            </aside>
+        </section>
+
+        <section class="panel-right" role="region" aria-label="代码编辑器">
+            <div class="editor-area">
+                <label for="codeInput" class="sr-only">代码编辑器</label>
+                <textarea class="code-input" id="codeInput" spellcheck="false" aria-label="C# 代码编辑器"></textarea>
+            </div>
+            <div class="input-area" id="inputArea" hidden>
+                <div class="input-header"><span>⌨ 输入</span><span class="input-hint" id="inputHint">程序等待输入…</span></div>
+                <div class="input-row">
+                    <label for="stdinInput" class="sr-only">程序输入</label>
+                    <input type="text" class="stdin-input" id="stdinInput" placeholder="输入后按回车…" autocomplete="off">
+                    <button class="btn-submit-input" id="btnSubmitInput">提交</button>
+                </div>
+            </div>
+            <div class="runner-bar">
+                <button class="btn-run" id="btnRun" aria-label="运行代码">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg> 运行
+                </button>
+                <button class="btn-sm" id="btnReset" title="重置代码" aria-label="重置代码">↺</button>
+                <button class="btn-sm" id="btnHint" title="提示" aria-label="查看提示">💡</button>
+                <button class="btn-sm" id="btnAnswer" title="查看答案" aria-label="查看答案">📖</button>
+                <span class="run-status" id="runStatus" aria-live="polite"></span>
+            </div>
+            <div class="output-area">
+                <div class="output-header"><span>输出</span><button class="btn-clear-output" id="btnClearOutput" aria-label="清空输出">✕</button></div>
+                <pre class="output-content" id="outputContent" aria-live="polite"></pre>
+            </div>
+        </section>
+    </main>
+
+    <div class="focus-overlay" id="focusOverlay"></div>
+    <div class="focus-modal" id="focusModal" role="dialog" aria-label="专注模式" aria-modal="true">
+        <div class="focus-topbar">
+            <span class="focus-title" id="focusTitle">专注模式</span>
+            <div class="focus-actions">
+                <button class="btn-run" id="focusRun" aria-label="运行代码">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg> 运行
+                </button>
+                <button class="btn-sm" id="focusReset" aria-label="重置代码">↺</button>
+                <button class="icon-btn" id="focusClose" aria-label="退出专注" title="Esc">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="focus-body">
+            <div class="focus-editor">
+                <label for="focusCodeInput" class="sr-only">专注模式代码编辑器</label>
+                <textarea class="code-input" id="focusCodeInput" spellcheck="false" aria-label="C# 代码编辑器"></textarea>
+            </div>
+            <div class="focus-input-area" id="focusInputArea" hidden>
+                <div class="input-row">
+                    <span class="input-hint" id="focusInputHint">⌨ 程序等待输入：</span>
+                    <label for="focusStdinInput" class="sr-only">程序输入</label>
+                    <input type="text" class="stdin-input" id="focusStdinInput" placeholder="输入后按回车…" autocomplete="off">
+                    <button class="btn-submit-input" id="focusSubmitInput">提交</button>
+                </div>
+            </div>
+            <div class="focus-output">
+                <div class="output-header"><span>输出</span><button class="btn-clear-output" id="focusClearOutput" aria-label="清空输出">✕</button></div>
+                <pre class="output-content" id="focusOutputContent" aria-live="polite"></pre>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast" role="alert" aria-live="assertive"></div>
+
+    <script src="js/storage.js"></script>
+    <script src="js/chapters-data.js"></script>
+    <script src="js/runner.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,2 @@
+# 部署到 GitHub Pages 时需要
+# 让浏览器把 _framework 等文件正确识别（暂未使用，预留）
