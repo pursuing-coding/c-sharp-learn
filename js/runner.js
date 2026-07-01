@@ -197,9 +197,7 @@ const CodeRunner = (function () {
             methodRegex.lastIndex = braceEnd + 1;
         }
 
-        // Extract constructor
-        const ctorRegex = /public\s+ClassName\s*\(([^)]*)\)\s*\{/g;
-        // We need to search for the actual class name
+        // Extract constructor (按实际类名匹配)
         const ctorRegex2 = new RegExp('public\\s+' + className + '\\s*\\(([^)]*)\\)\\s*\\{', 'g');
         let ctorMatch;
         let ctorBody = '';
@@ -333,17 +331,13 @@ const CodeRunner = (function () {
         // Console.WriteLine / Write / ReadLine
         js = replaceConsoleCalls(js);
 
-        // Integer division: when both operands look like int variables
-        // We can't perfectly detect this, so we wrap with Math.trunc for // operator
-        // Actually, let's not - it breaks too many things. The course uses double for division.
-
-        // virtual/override keywords - just strip them
+        // virtual/override 关键字：模拟器用 JS 原生方法分派，直接去掉这两个修饰符
         js = js.replace(/\bvirtual\s+/g, '');
         js = js.replace(/\boverride\s+/g, '');
 
-        // Integer division: track int variables and wrap their divisions with Math.trunc
-        // Collect int variable names from `let X =` where original was int declaration
-        // Heuristic: find patterns `let X = <integer literal>` or `let X = <int op int>`
+        // 整数除法：C# 中 int / int 截断小数。收集由整数字面量初始化的变量，
+        // 把这类变量之间的除法包一层 Math.trunc 以模拟截断语义。
+        // 启发式：匹配 `let X = <整数>` 或 `let X = <整数 op 整数>` 等模式。
         const intVars = new Set();
         // Match `let X = <digits>` or `let X = <digits> op <digits>` etc.
         js.replace(/\blet\s+(\w+)\s*=\s*(\d+(?:\s*[-+*/%]\s*\d+)*)\s*;/g, (match, name) => { intVars.add(name); return ''; });
@@ -392,11 +386,7 @@ const CodeRunner = (function () {
                 if (i < code.length) result += code[i++];
                 continue;
             }
-            // Detect `let X = [` (array initializer start)
-            const arrStart = code.substr(i, 8).match(/^let \w+ = \[$/m);
-            // Check if we just opened an array initializer (look back in result)
-            // Simpler: when we see `[` right after `= `, push "arr" context
-            // We'll track via stack of { kind: 'arr'|'brace'|'paren' }
+            // 检测 `[`：数组初始化器起始（栈上下文由下方统一维护）
             if (code[i] === '[') {
                 stack.push('arr');
                 result += code[i++];
