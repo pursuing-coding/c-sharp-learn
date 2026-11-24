@@ -1,378 +1,429 @@
-/**
- * app.js — 单页闯关学习应用
- * 专注模式 · 答案侧栏 · Console.ReadLine 输入
- */
 (function () {
     const $ = id => document.getElementById(id);
+    const allLessons = getAllLessonsFlat();
+    const knownIds = new Set(allLessons.map(item => item.id));
+    const sidebar = $('sidebar');
+    const sidebarBody = $('sidebarBody');
+    const catalogButton = $('btnCatalog');
+    const tutorial = $('tutorial');
+    const answerPanel = $('answerPanel');
+    const answerButton = $('btnAnswer');
+    const dialog = $('focusModal');
+    const toast = $('toast');
 
-    // DOM
-    const lessonTitle    = $('lessonTitle');
-    const progressFill   = $('progressFill');
-    const progressText   = $('progressText');
-    const stepIndicator  = $('stepIndicator');
-    const btnPrev        = $('btnPrev');
-    const btnNext        = $('btnNext');
-    const btnTheme       = $('btnTheme');
-    const btnFocus       = $('btnFocus');
-    const sidebarBody    = $('sidebarBody');
-    const tutorial       = $('tutorial');
-    const codeInput      = $('codeInput');
-    const btnRun         = $('btnRun');
-    const btnReset       = $('btnReset');
-    const btnHint        = $('btnHint');
-    const btnAnswer      = $('btnAnswer');
-    const runStatus      = $('runStatus');
-    const outputContent  = $('outputContent');
-    const btnClearOutput = $('btnClearOutput');
-    const btnResetProgress = $('btnResetProgress');
-    const toastEl        = $('toast');
+    const main = {
+        editor: $('codeInput'), output: $('outputContent'), run: $('btnRun'), status: $('runStatus'),
+        inputArea: $('inputArea'), input: $('stdinInput'), submit: $('btnSubmitInput'), inputHint: $('inputHint')
+    };
+    const focus = {
+        editor: $('focusCodeInput'), output: $('focusOutputContent'), run: $('focusRun'), status: $('focusRunStatus'),
+        inputArea: $('focusInputArea'), input: $('focusStdinInput'), submit: $('focusSubmitInput'), inputHint: $('focusInputHint')
+    };
 
-    // Input area
-    const inputArea      = $('inputArea');
-    const stdinInput     = $('stdinInput');
-    const inputHint      = $('inputHint');
-    const btnSubmitInput = $('btnSubmitInput');
+    let currentIndex = 0;
+    let activeRun = null;
+    let toastTimer;
+    let focusOpener;
+    let storageNoticeShown = false;
+    let resetAt = Storage.load().resetAt;
 
-    // Answer panel
-    const answerPanel    = $('answerPanel');
-    const answerCode     = $('answerCode');
-    const btnCloseAnswer = $('btnCloseAnswer');
-    const btnCopyAnswer  = $('btnCopyAnswer');
-
-    // Focus mode
-    const focusOverlay   = $('focusOverlay');
-    const focusModal     = $('focusModal');
-    const focusTitle     = $('focusTitle');
-    const focusCodeInput = $('focusCodeInput');
-    const focusRun       = $('focusRun');
-    const focusReset     = $('focusReset');
-    const focusClose     = $('focusClose');
-    const focusOutputContent = $('focusOutputContent');
-    const focusClearOutput  = $('focusClearOutput');
-    const focusInputArea    = $('focusInputArea');
-    const focusStdinInput   = $('focusStdinInput');
-    const focusSubmitInput  = $('focusSubmitInput');
-    const focusInputHint    = $('focusInputHint');
-
-    let allLessons = [];
-    let currentIndex = -1;
-    let currentLesson = null;
-    let focusMode = false;
-
-    // ===== Theme =====
-    function initTheme() { applyTheme(localStorage.getItem('csharp_theme') || 'dark'); }
-    function applyTheme(t) { document.documentElement.setAttribute('data-theme', t); document.body.setAttribute('data-theme', t); localStorage.setItem('csharp_theme', t); }
-    function toggleTheme() { applyTheme((document.documentElement.getAttribute('data-theme') || 'dark') === 'dark' ? 'light' : 'dark'); }
-
-    // ===== Init =====
-    function init() {
-        initTheme();
-        allLessons = getAllLessonsFlat();
-        buildSidebar();
-        bindEvents();
-        const lastId = Storage.load().lastLessonId;
-        const idx = lastId ? allLessons.findIndex(l => l.id === lastId) : -1;
-        loadLesson(idx >= 0 ? idx : 0);
+    function currentLesson() {
+        return allLessons[currentIndex].lesson;
     }
 
-    function isUnlocked(index) {
-        if (index === 0) return true;
-        return Storage.isCompleted(allLessons[index - 1].id);
+    function isUnlocked(index, completed = new Set(Storage.load().completedLessons)) {
+        return index === 0 || completed.has(allLessons[index - 1].id);
     }
 
-    // ===== Sidebar =====
-    function buildSidebar() {
-        const progress = Storage.load();
-        const completed = new Set(progress.completedLessons);
-        const indexMap = new Map();
-        allLessons.forEach((l, i) => indexMap.set(l.id, i));
-        let html = '';
-        CHAPTERS_DATA.forEach(stage => {
-            html += `<div class="sb-stage">${stage.stage}</div>`;
-            stage.chapters.forEach(ch => {
-                const done = ch.lessons.filter(l => completed.has(l.id)).length;
-                const dotClass = done === ch.lessons.length ? 'done' : done > 0 ? 'partial' : '';
-                html += `<div class="sb-chapter"><span class="ch-dot ${dotClass}"></span>${ch.title.replace(/^第 \d+ 章：/, '')}</div>`;
-                ch.lessons.forEach(l => {
-                    const d = completed.has(l.id);
-                    const gi = indexMap.get(l.id);
-                    const locked = !isUnlocked(gi);
-                    const cls = (d ? ' done' : '') + (locked ? ' locked' : '');
-                    const icon = d ? '✓' : (locked ? '🔒' : '○');
-                    html += `<div class="sb-lesson${cls}" data-id="${l.id}" data-idx="${gi}"><span class="ls-icon">${icon}</span><span class="ls-name">${l.title}</span></div>`;
-                });
-            });
-        });
-        sidebarBody.innerHTML = html;
+    function showToast(message, type) {
+        toast.textContent = message;
+        toast.className = 'toast show' + (type === 'warn' ? ' warn' : '');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { toast.className = 'toast'; }, 3000);
     }
 
-    // ===== Load Lesson =====
-    function loadLesson(index) {
-        if (index < 0 || index >= allLessons.length) return;
-        if (!isUnlocked(index)) { showToast('⚠️ 请先完成上一关', 'warn'); return; }
-        currentIndex = index;
-        const item = allLessons[index];
-        currentLesson = item.lesson;
-
-        lessonTitle.textContent = item.lesson.title;
-        stepIndicator.textContent = `${index + 1}/${allLessons.length}`;
-        updateProgress();
-
-        sidebarBody.querySelectorAll('.sb-lesson').forEach(el => el.classList.toggle('active', el.dataset.id === item.id));
-        const activeEl = sidebarBody.querySelector('.sb-lesson.active');
-        if (activeEl) activeEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-
-        tutorial.innerHTML = item.lesson.content + `
-            <div class="task-box">
-                <strong>🎯 任务</strong>：修改右侧代码，运行后让输出与要求一致即可通关。
-                <br><span style="font-size:11px;color:var(--text3)">快捷键：<span class="kbd">Ctrl+Enter</span> 运行 &nbsp; <span class="kbd">Alt+←</span> <span class="kbd">Alt+→</span> 切关 &nbsp; <span class="kbd">F11</span> 专注</span>
-            </div>`;
-
-        const saved = Storage.getCode(item.id);
-        codeInput.value = saved || item.lesson.starterCode;
-
-        outputContent.textContent = '';
-        outputContent.classList.remove('has-error');
-        runStatus.textContent = '';
-        runStatus.className = 'run-status';
-        inputArea.hidden = true;
-
-        const p = Storage.load(); p.lastLessonId = item.id; Storage.save(p);
-        btnPrev.disabled = index === 0;
-        btnNext.disabled = index === allLessons.length - 1;
-
-        // Close answer panel on lesson switch
-        answerPanel.classList.remove('open');
+    function applyTheme(theme) {
+        const value = theme === 'light' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = value;
+        $('btnTheme').setAttribute('aria-pressed', String(value === 'light'));
     }
 
-    function updateProgress() {
-        const c = Storage.load().completedLessons.length, t = allLessons.length;
-        const pct = t ? Math.round(c / t * 100) : 0;
-        progressFill.style.width = pct + '%';
-        progressText.textContent = `${c}/${t}`;
-        document.querySelector('.progress-track').setAttribute('aria-valuenow', String(pct));
+    function toggleTheme() {
+        const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+        applyTheme(next);
+        try { localStorage.setItem('csharp_theme', next); } catch {}
     }
 
-    // ===== Console.ReadLine Input Support =====
-    // We pre-ask for all inputs before running, then feed them in order
-    function collectReadLineCalls(code) {
-        const m = code.match(/Console\.ReadLine\s*\(\)/g);
-        return m ? m.length : 0;
+    function saveDraft(view) {
+        if (Storage.saveCode(currentLesson().id, view.editor.value) || storageNoticeShown) return;
+        storageNoticeShown = true;
+        showToast('浏览器存储当前不可用，本次编辑只在此页面保留。', 'warn');
     }
 
-    let pendingInputs = [];
-
-    // ===== Run Code =====
-    async function runCode(useFocusEditor) {
-        const editor = useFocusEditor ? focusCodeInput : codeInput;
-        const out = useFocusEditor ? focusOutputContent : outputContent;
-        const statusEl = useFocusEditor ? null : runStatus;
-        const code = editor.value;
-        if (!code.trim()) return;
-
-        // Check if code uses Console.ReadLine
-        const readlineCount = collectReadLineCalls(code);
-        pendingInputs = [];
-
-        if (readlineCount > 0) {
-            // 预填输入模式：运行前一次性收齐所有 Console.ReadLine 所需输入，再按顺序喂给程序
-            // 因此无法支持"先输出提示再读输入"的交互式程序，入门关卡均按此模式设计
-            const inputAreaEl = useFocusEditor ? focusInputArea : inputArea;
-            const inputEl = useFocusEditor ? focusStdinInput : stdinInput;
-            const submitBtn = useFocusEditor ? focusSubmitInput : btnSubmitInput;
-            const hintEl = useFocusEditor ? focusInputHint : inputHint;
-
-            for (let i = 0; i < readlineCount; i++) {
-                inputAreaEl.hidden = false;
-                hintEl.textContent = `⌨ 输入 ${i + 1}/${readlineCount}：`;
-                inputEl.value = '';
-                inputEl.focus();
-
-                const val = await new Promise(resolve => {
-                    const handler = () => { resolve(inputEl.value); inputEl.value = ''; };
-                    const enterHandler = (e) => { if (e.key === 'Enter') { e.preventDefault(); handler(); } };
-                    submitBtn.onclick = handler;
-                    inputEl.onkeydown = enterHandler;
-                });
-                pendingInputs.push(val);
-            }
-            // 清理事件引用，避免下次运行残留触发
-            submitBtn.onclick = null;
-            inputEl.onkeydown = null;
-            inputAreaEl.hidden = true;
-        }
-
-        if (!useFocusEditor) { btnRun.disabled = true; runStatus.textContent = '⏳'; runStatus.className = 'run-status'; }
-        out.textContent = '';
-        out.classList.remove('has-error');
-
-        const result = await CodeRunner.run(code, pendingInputs);
-
-        out.textContent = result.output || '(无输出)';
-        if (statusEl) {
-            statusEl.textContent = result.status === 'success' ? '✓ 完成' : '✗ 出错';
-            statusEl.className = 'run-status ' + (result.status === 'success' ? 'ok' : 'err');
-        }
-        if (result.status !== 'success') out.classList.add('has-error');
-        if (!useFocusEditor) btnRun.disabled = false;
-
-        Storage.saveCode(currentLesson.id, code);
-
-        // Check pass (only from main editor, not focus)
-        if (!useFocusEditor && result.status === 'success' && currentLesson.expectedOutput &&
-            CodeRunner.checkOutput(result.output, currentLesson.expectedOutput)) {
-            const already = Storage.isCompleted(currentLesson.id);
-            const usedAns = Storage.hasUsedAnswer(currentLesson.id);
-            if (!already) {
-                // 用过参考答案的关：解锁但不奖励星星、不庆祝
-                Storage.completeLesson(currentLesson.id, usedAns ? 0 : 1);
-                showToast(usedAns ? '✓ 通过（参考答案，不计 ⭐）' : '🎉 通关！⭐ +1');
-                buildSidebar();
-                updateProgress();
-            }
-        }
+    function setCatalog(open, returnFocus = false) {
+        sidebar.classList.toggle('open', open);
+        catalogButton.setAttribute('aria-expanded', String(open));
+        if (returnFocus) catalogButton.focus();
     }
 
-    // ===== Focus Mode =====
-    function openFocus() {
-        focusMode = true;
-        focusOverlay.classList.add('show');
-        focusModal.classList.add('show');
-        focusTitle.textContent = currentLesson ? currentLesson.title : '专注模式';
-        focusCodeInput.value = codeInput.value;
-        focusOutputContent.textContent = outputContent.textContent;
-        focusInputArea.hidden = true;
-        focusCodeInput.focus();
-    }
-    function closeFocus() {
-        focusMode = false;
-        focusOverlay.classList.remove('show');
-        focusModal.classList.remove('show');
-        // Sync code back
-        codeInput.value = focusCodeInput.value;
-        outputContent.textContent = focusOutputContent.textContent;
+    function renderProgress() {
+        const completed = new Set(Storage.load().completedLessons.filter(id => knownIds.has(id)));
+        const currentId = allLessons[currentIndex].id;
+        const indices = new Map(allLessons.map((item, index) => [item.id, index]));
+        sidebarBody.innerHTML = CHAPTERS_DATA.map(stage => {
+            const chapters = stage.chapters.map(chapter => {
+                const count = chapter.lessons.filter(lesson => completed.has(lesson.id)).length;
+                const dot = count === chapter.lessons.length ? 'done' : count ? 'partial' : '';
+                const lessons = chapter.lessons.map(lesson => {
+                    const index = indices.get(lesson.id);
+                    const done = completed.has(lesson.id);
+                    const locked = !isUnlocked(index, completed);
+                    const active = lesson.id === currentId;
+                    const icon = done ? '✓' : locked ? '🔒' : '○';
+                    const status = done ? '已完成' : locked ? '未解锁' : '可学习';
+                    return `<button type="button" class="sb-lesson${done ? ' done' : ''}${active ? ' active' : ''}" data-idx="${index}" ${active ? 'aria-current="step"' : ''} ${locked ? 'disabled' : ''}><span class="ls-icon" aria-hidden="true">${icon}</span><span class="ls-name">${lesson.title}</span><span class="sr-only">（${status}）</span></button>`;
+                }).join('');
+                return `<div class="sb-chapter"><span class="ch-dot ${dot}" aria-hidden="true"></span>${chapter.title.replace(/^第 \d+ 章：/, '')}</div>${lessons}`;
+            }).join('');
+            return `<div class="sb-stage">${stage.stage}</div>${chapters}`;
+        }).join('');
+        const percent = Math.round(completed.size / allLessons.length * 100);
+        $('progressFill').style.width = percent + '%';
+        $('progressText').textContent = `${completed.size}/${allLessons.length}`;
+        document.querySelector('.progress-track').setAttribute('aria-valuenow', String(percent));
+
+        $('btnPrev').disabled = currentIndex === 0;
+        const nextIndex = currentIndex + 1;
+        const atEnd = nextIndex === allLessons.length;
+        $('btnNext').disabled = atEnd || !isUnlocked(nextIndex, completed);
+        $('btnNext').title = atEnd ? '已到最后一关' : $('btnNext').disabled ? '完成本关后解锁' : '下一关 Alt+→';
     }
 
-    // ===== Answer Panel =====
+    function closeAnswer(returnFocus = false) {
+        answerPanel.hidden = true;
+        answerButton.setAttribute('aria-expanded', 'false');
+        if (returnFocus) answerButton.focus();
+    }
+
     function openAnswer() {
-        if (!currentLesson) return;
-        // 只要查看过答案就标记不计星（无需等到复制）
-        Storage.markUsedAnswer(currentLesson.id);
-        answerCode.textContent = currentLesson.answer;
-        answerPanel.classList.add('open');
-    }
-    function closeAnswer() { answerPanel.classList.remove('open'); }
-    function toggleAnswer() {
-        answerPanel.classList.contains('open') ? closeAnswer() : openAnswer();
+        const lesson = currentLesson();
+        Storage.markUsedAnswer(lesson.id);
+        $('answerCode').textContent = lesson.answer;
+        answerPanel.hidden = false;
+        answerButton.setAttribute('aria-expanded', 'true');
+        $('btnCloseAnswer').focus();
     }
 
-    // ===== Events =====
-    function bindEvents() {
-        btnRun.onclick = () => runCode(false);
-        btnReset.onclick = () => {
-            if (!currentLesson) return;
-            codeInput.value = currentLesson.starterCode;
-            outputContent.textContent = ''; outputContent.classList.remove('has-error');
-            runStatus.textContent = ''; runStatus.className = 'run-status';
-            Storage.saveCode(currentLesson.id, currentLesson.starterCode);
-        };
-        btnHint.onclick = () => { if (currentLesson) showToast('💡 ' + currentLesson.hint, 'warn'); };
-        btnAnswer.onclick = toggleAnswer;
-        btnCloseAnswer.onclick = closeAnswer;
-        btnCopyAnswer.onclick = () => {
-            if (!currentLesson) return;
-            codeInput.value = currentLesson.answer;
-            Storage.markUsedAnswer(currentLesson.id);
-            closeAnswer();
-            showToast('已复制到编辑器（参考答案，本关不计 ⭐）');
-        };
-        btnClearOutput.onclick = () => { outputContent.textContent = ''; outputContent.classList.remove('has-error'); };
+    function showOutput(view, text, isError = false) {
+        view.output.textContent = text;
+        view.output.classList.toggle('has-error', isError);
+    }
 
-        btnPrev.onclick = () => loadLesson(currentIndex - 1);
-        btnNext.onclick = () => loadLesson(currentIndex + 1);
-        btnTheme.onclick = toggleTheme;
-        btnFocus.onclick = openFocus;
+    function setStatus(view, message = '', state = '') {
+        view.status.textContent = message;
+        view.status.className = state ? 'run-status ' + state : 'run-status';
+    }
 
-        // Focus mode
-        focusOverlay.onclick = closeFocus;
-        focusClose.onclick = closeFocus;
-        focusRun.onclick = () => runCode(true);
-        focusReset.onclick = () => { if (currentLesson) focusCodeInput.value = currentLesson.starterCode; focusOutputContent.textContent = ''; };
-        focusClearOutput.onclick = () => { focusOutputContent.textContent = ''; };
-        focusSubmitInput.onclick = () => { /* handled in runCode */ };
-        focusStdinInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); /* handled in runCode */ } });
+    function setRunning(view, running) {
+        const label = running ? '停止' : '运行';
+        view.run.querySelector('span').textContent = label;
+        view.run.setAttribute('aria-label', label + '代码');
+    }
 
-        btnResetProgress.onclick = () => {
-            if (confirm('确定清空所有进度？不可恢复！')) { Storage.reset(); buildSidebar(); updateProgress(); showToast('进度已重置'); }
-        };
+    function cancelRun({ announce = false } = {}) {
+        if (!activeRun) return;
+        const { view, controller } = activeRun;
+        activeRun = null;
+        controller.abort();
+        setRunning(view, false);
+        setStatus(view, announce ? '已停止' : '');
+    }
 
-        sidebarBody.addEventListener('click', e => {
-            const el = e.target.closest('.sb-lesson');
-            if (!el || el.classList.contains('locked')) return;
-            const idx = parseInt(el.dataset.idx, 10);
-            if (!isNaN(idx)) loadLesson(idx);
+    function loadLesson(index) {
+        if (index < 0 || index >= allLessons.length || !isUnlocked(index)) return false;
+        cancelRun();
+        currentIndex = index;
+        const lesson = currentLesson();
+        $('lessonTitle').textContent = lesson.title;
+        $('stepIndicator').textContent = `${index + 1}/${allLessons.length}`;
+        tutorial.innerHTML = lesson.content;
+        tutorial.scrollTop = 0;
+        main.editor.value = Storage.getCode(lesson.id) ?? lesson.starterCode;
+        showOutput(main, '');
+        setStatus(main);
+        closeAnswer();
+        renderProgress();
+        Storage.setLastLesson(lesson.id);
+        sidebarBody.querySelector('[aria-current="step"]')?.scrollIntoView({ block: 'nearest' });
+        return true;
+    }
+
+    function waitForInput(view, count, signal) {
+        return new Promise(resolve => {
+            function done(value) {
+                view.submit.removeEventListener('click', submit);
+                view.input.removeEventListener('keydown', onKey);
+                signal.removeEventListener('abort', abort);
+                view.inputArea.hidden = true;
+                resolve(value);
+            }
+
+            function submit() { done(view.input.value); }
+            function abort() { done(null); }
+            function onKey(event) {
+                if (event.key !== 'Enter' || event.isComposing) return;
+                event.preventDefault();
+                submit();
+            }
+
+            view.inputHint.textContent = `等待第 ${count} 行输入`;
+            view.input.value = '';
+            view.inputArea.hidden = false;
+            view.submit.addEventListener('click', submit);
+            view.input.addEventListener('keydown', onKey);
+            signal.addEventListener('abort', abort, { once: true });
+            view.input.focus();
         });
-
-        // Keyboard
-        codeInput.addEventListener('keydown', handleEditorKeys);
-        focusCodeInput.addEventListener('keydown', handleEditorKeys);
-
-        document.addEventListener('keydown', e => {
-            if (e.target === codeInput || e.target === focusCodeInput || e.target === stdinInput || e.target === focusStdinInput) return;
-            if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); loadLesson(currentIndex - 1); }
-            if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); loadLesson(currentIndex + 1); }
-            if (e.key === 'F11') { e.preventDefault(); focusMode ? closeFocus() : openFocus(); }
-            if (e.key === 'Escape' && focusMode) { e.preventDefault(); closeFocus(); }
-        });
     }
 
-    function handleEditorKeys(e) {
-        // Ctrl/Cmd + Enter 运行
-        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-            e.preventDefault();
-            runCode(e.target === focusCodeInput);
+    async function grade(lesson, code, result, inputs, signal) {
+        if (lesson.requiresComment && !CodeRunner.hasComment(code)) return '请添加一条注释并保持输出不变';
+        if (lesson.echoPrefix) {
+            if (inputs.length !== 1 || !CodeRunner.checkOutput(result.output, lesson.echoPrefix + inputs[0])) {
+                return '请读取一行输入并按题目格式原样输出';
+            }
+            const sample = inputs[0] === '测试' ? '你好 C#' : '测试';
+            const checked = await CodeRunner.run(code, [sample], { signal });
+            return checked.status === 'success' && CodeRunner.checkOutput(checked.output, lesson.echoPrefix + sample)
+                ? '' : '换一组输入后输出不符，请使用读到的内容';
+        }
+        return CodeRunner.checkOutput(result.output, lesson.expectedOutput) ? '' : '输出与任务要求不符';
+    }
+
+    async function run(view) {
+        if (activeRun?.view === view) {
+            cancelRun({ announce: true });
             return;
         }
-        // Tab 缩进 / Shift+Tab 反缩进
-        if (e.key === 'Tab') {
-            e.preventDefault();
-            const ta = e.target;
-            const s = ta.selectionStart, en = ta.selectionEnd;
-            if (e.shiftKey) {
-                // 反缩进：删除光标行前最多4个空格
-                const lineStart = ta.value.lastIndexOf('\n', s - 1) + 1;
-                const lineHead = ta.value.substring(lineStart, lineStart + 4);
-                const cut = lineHead.match(/^ {1,4}/);
-                if (cut) {
-                    ta.value = ta.value.substring(0, lineStart) + ta.value.substring(lineStart + cut[0].length);
-                    ta.selectionStart = ta.selectionEnd = Math.max(lineStart, s - cut[0].length);
-                }
+        const code = view.editor.value;
+        if (!code.trim()) {
+            setStatus(view, '请先输入代码', 'err');
+            return;
+        }
+        cancelRun();
+        const lesson = currentLesson();
+        const controller = new AbortController();
+        const session = { view, controller };
+        activeRun = session;
+        const { signal } = controller;
+        const inputs = [];
+        setRunning(view, true);
+        setStatus(view, '运行中');
+        showOutput(view, '');
+        if (Storage.getCode(lesson.id) !== code) saveDraft(view);
+
+        try {
+            let result = await CodeRunner.run(code, inputs, { signal });
+            while (result.status === 'input' && !signal.aborted && inputs.length < 32) {
+                showOutput(view, result.output);
+                setStatus(view, '等待输入');
+                const value = await waitForInput(view, inputs.length + 1, signal);
+                if (value === null || signal.aborted) return;
+                view.run.focus();
+                inputs.push(value);
+                setStatus(view, '运行中');
+                result = await CodeRunner.run(code, inputs, { signal });
+            }
+            if (signal.aborted || activeRun !== session || Storage.load().resetAt !== resetAt) return;
+            if (result.status === 'input') result = { status: 'error', output: '输入超过 32 行，请检查循环结束条件。' };
+            showOutput(view, result.output || '（无输出）', result.status !== 'success');
+            if (result.status !== 'success') {
+                setStatus(view, '运行出错', 'err');
+                return;
+            }
+
+            const note = await grade(lesson, code, result, inputs, signal);
+            if (signal.aborted || activeRun !== session || Storage.load().resetAt !== resetAt) return;
+            if (note) {
+                setStatus(view, note, 'err');
+                return;
+            }
+            setStatus(view, '已通过', 'ok');
+            if (!Storage.isCompleted(lesson.id)) {
+                const usedAnswer = Storage.hasUsedAnswer(lesson.id);
+                Storage.completeLesson(lesson.id, usedAnswer ? 0 : 1);
+                renderProgress();
+                showToast(usedAnswer ? '已通过，查看过参考答案，本关不计星' : '通关！获得一颗星');
+            }
+        } catch (error) {
+            if (activeRun !== session) return;
+            showOutput(view, String(error.message || error), true);
+            setStatus(view, '运行出错', 'err');
+        } finally {
+            if (activeRun === session) {
+                activeRun = null;
+                setRunning(view, false);
+            }
+        }
+    }
+
+    function copyOutput(from, to) {
+        showOutput(to, from.output.textContent, from.output.classList.contains('has-error'));
+        to.status.textContent = from.status.textContent;
+        to.status.className = from.status.className;
+    }
+
+    function openFocus(event) {
+        cancelRun({ announce: true });
+        closeAnswer();
+        setCatalog(false);
+        focusOpener = event?.currentTarget ?? document.activeElement;
+        $('focusTitle').textContent = currentLesson().title;
+        focus.editor.value = main.editor.value;
+        copyOutput(main, focus);
+        dialog.showModal();
+        focus.editor.focus();
+    }
+
+    function closeFocus() {
+        if (!dialog.open) return;
+        cancelRun({ announce: true });
+        main.editor.value = focus.editor.value;
+        copyOutput(focus, main);
+        dialog.close();
+        if (focusOpener && focusOpener !== document.body) focusOpener.focus();
+        else $('btnFocus').focus();
+    }
+
+    function resetEditor(view) {
+        cancelRun();
+        view.editor.value = currentLesson().starterCode;
+        showOutput(view, '');
+        setStatus(view);
+        saveDraft(view);
+        view.editor.focus();
+    }
+
+    function editRange(editor, start, end, replacement, cursor) {
+        editor.setSelectionRange(start, end);
+        if (!document.execCommand('insertText', false, replacement)) {
+            editor.setRangeText(replacement, start, end);
+            editor.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        editor.setSelectionRange(cursor, cursor);
+    }
+
+    function handleEditorKey(event, view) {
+        if (event.isComposing || event.keyCode === 229) return;
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+            event.preventDefault();
+            run(view);
+            return;
+        }
+        const editor = view.editor;
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        if (event.ctrlKey && (event.key === '[' || event.key === ']')) {
+            event.preventDefault();
+            if (event.key === ']') {
+                editRange(editor, start, end, '    ', start + 4);
             } else {
-                ta.value = ta.value.substring(0, s) + '    ' + ta.value.substring(en);
-                ta.selectionStart = ta.selectionEnd = s + 4;
+                const lineStart = start === 0 ? 0 : editor.value.lastIndexOf('\n', start - 1) + 1;
+                const indent = editor.value.slice(lineStart).match(/^ {1,4}/)?.[0].length;
+                if (indent) editRange(editor, lineStart, lineStart + indent, '', Math.max(lineStart, start - indent));
             }
             return;
         }
-        // 自动配对：() [] {} "" ''（输入时自动补全并光标居中；遇同字符则跳过）
-        const pairs = {'(':')','[':']','{':'}','"':'"',"'":"'"};
-        if (pairs[e.key]) {
-            const ta = e.target;
-            const s = ta.selectionStart, en = ta.selectionEnd;
-            if (s === en) {
-                e.preventDefault();
-                ta.value = ta.value.substring(0, s) + e.key + pairs[e.key] + ta.value.substring(en);
-                ta.selectionStart = ta.selectionEnd = s + 1;
-            }
+        if (start !== end || event.altKey || event.metaKey || event.ctrlKey) return;
+        const pairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'" };
+        if (Object.values(pairs).includes(event.key) && editor.value[start] === event.key) {
+            event.preventDefault();
+            editor.setSelectionRange(start + 1, start + 1);
+        } else if (Object.hasOwn(pairs, event.key)) {
+            event.preventDefault();
+            editRange(editor, start, end, event.key + pairs[event.key], start + 1);
         }
     }
 
-    // ===== Toast =====
-    function showToast(msg, type) {
-        toastEl.textContent = msg;
-        toastEl.className = 'toast show' + (type === 'warn' ? ' warn' : '');
-        clearTimeout(toastEl._t);
-        toastEl._t = setTimeout(() => toastEl.className = 'toast', 2400);
+    for (const view of [main, focus]) {
+        view.run.addEventListener('click', () => run(view));
+        view.editor.addEventListener('input', () => {
+            cancelRun();
+            setStatus(view);
+            saveDraft(view);
+        });
+        view.editor.addEventListener('keydown', event => handleEditorKey(event, view));
     }
 
-    init();
+    $('btnReset').onclick = () => resetEditor(main);
+    $('focusReset').onclick = () => resetEditor(focus);
+    $('btnClearOutput').onclick = () => showOutput(main, '');
+    $('focusClearOutput').onclick = () => showOutput(focus, '');
+    $('btnHint').onclick = () => showToast(currentLesson().hint, 'warn');
+    answerButton.onclick = () => answerPanel.hidden ? openAnswer() : closeAnswer();
+    $('btnCloseAnswer').onclick = () => closeAnswer(true);
+    $('btnCopyAnswer').onclick = () => {
+        cancelRun();
+        main.editor.value = currentLesson().answer;
+        saveDraft(main);
+        closeAnswer();
+        main.editor.focus();
+        showToast('已复制参考答案到编辑器，本关不计星');
+    };
+
+    $('btnPrev').onclick = () => loadLesson(currentIndex - 1);
+    $('btnNext').onclick = () => loadLesson(currentIndex + 1);
+    $('btnTheme').onclick = toggleTheme;
+    $('btnFocus').onclick = openFocus;
+    $('focusClose').onclick = closeFocus;
+    dialog.addEventListener('cancel', event => {
+        event.preventDefault();
+        closeFocus();
+    });
+    catalogButton.onclick = () => setCatalog(!sidebar.classList.contains('open'));
+    sidebarBody.addEventListener('click', event => {
+        const button = event.target.closest('button[data-idx]');
+        if (!button || !loadLesson(Number(button.dataset.idx))) return;
+        setCatalog(false);
+        tutorial.focus({ preventScroll: true });
+    });
+    $('btnResetProgress').onclick = () => {
+        if (!confirm('确定清空所有进度和草稿？此操作不可撤销。')) return;
+        cancelRun();
+        resetAt = Storage.reset();
+        loadLesson(0);
+        setCatalog(false);
+        showToast('进度已重置');
+    };
+    document.addEventListener('keydown', event => {
+        if (event.isComposing || event.defaultPrevented) return;
+        if (event.key === 'F11') {
+            event.preventDefault();
+            if (dialog.open) closeFocus();
+            else openFocus();
+        } else if (event.key === 'Escape' && !dialog.open) {
+            if (!answerPanel.hidden) closeAnswer(true);
+            else if (sidebar.classList.contains('open')) setCatalog(false, true);
+        } else if (!dialog.open && event.altKey && !event.target.matches('input, textarea')) {
+            if (event.key === 'ArrowLeft') loadLesson(currentIndex - 1);
+            if (event.key === 'ArrowRight') loadLesson(currentIndex + 1);
+        }
+    });
+    window.addEventListener('storage', event => {
+        if (event.key !== Storage.key && event.key !== null) return;
+        const latestReset = Storage.load().resetAt;
+        if (latestReset !== resetAt || !isUnlocked(currentIndex)) {
+            resetAt = latestReset;
+            closeFocus();
+            loadLesson(0);
+        } else {
+            renderProgress();
+        }
+    });
+
+    let theme;
+    try { theme = localStorage.getItem('csharp_theme'); } catch {}
+    applyTheme(theme);
+    const savedIndex = allLessons.findIndex(item => item.id === Storage.load().lastLessonId);
+    if (!loadLesson(savedIndex)) loadLesson(0);
 })();
