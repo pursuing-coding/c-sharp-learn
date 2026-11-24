@@ -1,154 +1,109 @@
-/**
- * storage.js - 本地进度存储服务
- * 基于 localStorage，无需后端，谁用谁存
- */
-const Storage = (function () {
-    const STORAGE_KEY = 'csharp_learn_progress_v1';
+const Storage = (() => {
+    const key = 'csharp_learn_progress_v1';
+    let memory;
+    let volatile = false;
 
-    /**
-     * 默认进度结构
-     */
-    function defaultProgress() {
+    function normalize(value) {
+        const progress = value && typeof value === 'object' ? value : {};
+        const ids = list => Array.isArray(list) ? [...new Set(list.filter(id => typeof id === 'string'))] : [];
+        const count = (number, fallback) => Number.isSafeInteger(number) && number >= 0 ? number : fallback;
+        const now = Date.now();
         return {
             version: 1,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            completedLessons: [],   // 已完成关卡 ID 列表
-            stars: 0,               // 累计获得星星
-            currentChapter: 1,      // 当前所在章节
-            codeHistory: {},        // 各关卡的代码历史 { lessonId: code }
-            streakDays: 1,          // 连续学习天数
-            lastStudyDate: null,    // 最近学习日期 yyyy-mm-dd
-            lastLessonId: null,     // 最近打开的关卡 ID（恢复上次进度用）
-            usedAnswerLessons: []   // 曾复制过参考答案的关卡 ID（不奖励星星，用于防腐）
+            createdAt: count(progress.createdAt, now),
+            updatedAt: count(progress.updatedAt, now),
+            resetAt: count(progress.resetAt, 0),
+            completedLessons: ids(progress.completedLessons),
+            usedAnswerLessons: ids(progress.usedAnswerLessons),
+            stars: count(progress.stars, 0),
+            currentChapter: count(progress.currentChapter, 1),
+            codeHistory: Object.fromEntries(Object.entries(progress.codeHistory ?? {}).filter(([id, code]) =>
+                /^c\d+l\d+$/.test(id) && typeof code === 'string'
+            )),
+            streakDays: count(progress.streakDays, 1),
+            lastStudyDate: typeof progress.lastStudyDate === 'string' ? progress.lastStudyDate : null,
+            lastLessonId: typeof progress.lastLessonId === 'string' ? progress.lastLessonId : null
         };
     }
 
-    /**
-     * 读取进度
-     */
     function load() {
-        try {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            if (!raw) return defaultProgress();
-            const data = JSON.parse(raw);
-            // 兼容性：补齐缺失字段
-            const base = defaultProgress();
-            return Object.assign(base, data);
-        } catch (e) {
-            console.warn('读取进度失败，重置为默认:', e);
-            return defaultProgress();
+        if (!volatile) {
+            try {
+                memory = normalize(JSON.parse(localStorage.getItem(key)));
+            } catch {
+                memory ??= normalize();
+            }
         }
+        return normalize(memory);
     }
 
-    /**
-     * 保存进度
-     */
     function save(progress) {
-        progress.updatedAt = Date.now();
+        memory = normalize({ ...progress, updatedAt: Date.now() });
         try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(progress));
+            localStorage.setItem(key, JSON.stringify(memory));
+            volatile = false;
             return true;
-        } catch (e) {
-            console.error('保存进度失败:', e);
+        } catch {
+            volatile = true;
             return false;
         }
     }
 
-    /**
-     * 标记关卡完成
-     */
-    function completeLesson(lessonId, stars = 1) {
+    function completeLesson(id, stars = 1) {
         const progress = load();
-        if (!progress.completedLessons.includes(lessonId)) {
-            progress.completedLessons.push(lessonId);
+        if (!progress.completedLessons.includes(id)) {
+            progress.completedLessons.push(id);
             progress.stars += stars;
-        }
-        updateStreak(progress);
-        save(progress);
-        return progress;
-    }
-
-    /**
-     * 保存关卡代码
-     */
-    function saveCode(lessonId, code) {
-        const progress = load();
-        progress.codeHistory[lessonId] = code;
-        save(progress);
-    }
-
-    /**
-     * 读取关卡代码
-     */
-    function getCode(lessonId) {
-        const progress = load();
-        return progress.codeHistory[lessonId] || null;
-    }
-
-    /**
-     * 更新连续学习天数
-     */
-    function updateStreak(progress) {
-        const today = new Date().toISOString().slice(0, 10);
-        if (progress.lastStudyDate === today) return;
-        if (progress.lastStudyDate) {
-            const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-            if (progress.lastStudyDate === yesterday) {
-                progress.streakDays += 1;
-            } else {
-                progress.streakDays = 1;
+            const now = new Date();
+            const dateString = date => [date.getFullYear(), date.getMonth() + 1, date.getDate()]
+                .map(value => String(value).padStart(2, '0')).join('-');
+            const today = dateString(now);
+            if (progress.lastStudyDate !== today) {
+                now.setDate(now.getDate() - 1);
+                progress.streakDays = progress.lastStudyDate === dateString(now) ? progress.streakDays + 1 : 1;
+                progress.lastStudyDate = today;
             }
-        }
-        progress.lastStudyDate = today;
-    }
-
-    /**
-     * 重置所有进度
-     */
-    function reset() {
-        localStorage.removeItem(STORAGE_KEY);
-        return defaultProgress();
-    }
-
-    /**
-     * 计算完成百分比
-     */
-    function percentComplete(totalLessons) {
-        const progress = load();
-        if (!totalLessons) return 0;
-        return Math.round((progress.completedLessons.length / totalLessons) * 100);
-    }
-
-    /**
-     * 标记某关曾复制过参考答案（不奖励星星，用于防腐）
-     */
-    function markUsedAnswer(lessonId) {
-        const progress = load();
-        if (!progress.usedAnswerLessons.includes(lessonId)) {
-            progress.usedAnswerLessons.push(lessonId);
             save(progress);
         }
-        return progress;
     }
 
-    /**
-     * 是否曾复制过该关参考答案
-     */
-    function hasUsedAnswer(lessonId) {
-        return load().usedAnswerLessons.includes(lessonId);
+    function saveCode(id, code) {
+        const progress = load();
+        if (progress.codeHistory[id] === code) return !volatile;
+        progress.codeHistory[id] = code;
+        return save(progress);
+    }
+
+    function setLastLesson(id) {
+        const progress = load();
+        if (progress.lastLessonId === id) return;
+        progress.lastLessonId = id;
+        save(progress);
+    }
+
+    function markUsedAnswer(id) {
+        const progress = load();
+        if (progress.usedAnswerLessons.includes(id)) return;
+        progress.usedAnswerLessons.push(id);
+        save(progress);
+    }
+
+    function reset() {
+        const resetAt = Math.max(Date.now(), load().resetAt + 1);
+        save(normalize({ resetAt }));
+        return resetAt;
     }
 
     return {
+        key,
         load,
-        save,
         completeLesson,
         saveCode,
-        getCode,
+        getCode: id => load().codeHistory[id] ?? null,
+        setLastLesson,
         reset,
-        percentComplete,
         markUsedAnswer,
-        hasUsedAnswer,
-        isCompleted: (id) => load().completedLessons.includes(id)
+        hasUsedAnswer: id => load().usedAnswerLessons.includes(id),
+        isCompleted: id => load().completedLessons.includes(id)
     };
 })();

@@ -2,12 +2,11 @@
  * runner.js — C# 代码在线运行器（本地轻量模拟执行）
  * 把 C# 代码翻译成等价 JS 后用 Function 执行
  */
-const CodeRunner = (function () {
+function createSimulator() {
 
     async function run(code, inputs) {
         try {
-            const output = simulate(code, inputs || []);
-            return { output, status: 'success' };
+            return simulate(code, inputs || []);
         } catch (e) {
             return { output: '【运行错误】' + (e.message || String(e)), status: 'error' };
         }
@@ -16,23 +15,56 @@ const CodeRunner = (function () {
     function simulate(csharpCode, inputs) {
         const translated = translateToJs(csharpCode);
         const output = [];
-        const __out = (...args) => output.push(args.map(formatArg).join('') + '\n');
-        const __outNoNl = (...args) => output.push(args.map(formatArg).join(''));
+        let outputLength = 0;
+        function write(args, suffix) {
+            const text = args.map(formatArg).join('') + suffix;
+            outputLength += text.length;
+            if (outputLength > 20_000) throw new Error('输出超过 20,000 字符');
+            output.push(text);
+        }
+        const __out = (...args) => write(args, '\n');
+        const __outNoNl = (...args) => write(args, '');
 
         // Console.ReadLine support: __readline() returns next input from queue
         let inputIndex = 0;
+        const needsInput = Symbol('needsInput');
         const __readline = () => {
             if (inputIndex < inputs.length) return inputs[inputIndex++];
-            return '';  // default empty if no more inputs
+            throw needsInput;
         };
 
         try {
-            const fn = new Function('__out', '__outNoNl', '__readline', translated.code);
-            fn(__out, __outNoNl, __readline);
+            const fn = new Function('__out', '__outNoNl', '__readline', '__intDiv', '__parseInt', '__parseDouble', '__format', '__join', '__replace', translated.code);
+            fn(__out, __outNoNl, __readline, intDivide, parseInt32, parseDouble, formatArg, (separator, values) => values.join(separator), replaceString);
         } catch (e) {
+            if (e === needsInput) return { output: output.join(''), status: 'input' };
             output.push('【运行时错误】' + (e.message || String(e)) + '\n');
+            return { output: output.join(''), status: 'error' };
         }
-        return output.join('');
+        return { output: output.join(''), status: 'success' };
+    }
+
+    function intDivide(left, right) {
+        if (right === 0) throw new Error('整数不能除以 0');
+        return Math.trunc(left / right);
+    }
+
+    function parseInt32(value) {
+        if (!/^[+-]?\d+$/.test(String(value ?? '').trim())) throw new Error('输入不是有效的整数');
+        const number = Number(value);
+        if (number < -2147483648 || number > 2147483647) throw new Error('整数超出 int 范围');
+        return number;
+    }
+
+    function parseDouble(value) {
+        const text = String(value ?? '').trim();
+        if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text)) throw new Error('输入不是有效的数字');
+        return Number(text);
+    }
+
+    function replaceString(text, search, replacement) {
+        if (!search) throw new Error('查找的字符串不能为空');
+        return text.replaceAll(search, () => replacement ?? '');
     }
 
     function formatArg(v) {
@@ -49,13 +81,13 @@ const CodeRunner = (function () {
         js = stripComments(js);
 
         // 2. Strip using statements
-        js = js.replace(/^\s*using\s+[^;]+;\s*$/gm, '');
+        js = js.replace(/^\s*using\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*;\s*/gm, '');
 
         // 3. Extract ALL class blocks, translate each to JS class
         const classBlocks = extractAllClasses(js);
 
         // 4. Find the "Program" class (has Main), extract Main body
-        let mainBody = '';
+        let mainBody = null;
         let otherCode = '';
         for (const cb of classBlocks) {
             if (cb.isProgram) {
@@ -65,7 +97,8 @@ const CodeRunner = (function () {
         }
 
         // 5. Translate Main body
-        let mainJs = translateStatements(mainBody);
+        if (mainBody === null && classBlocks.length) throw new Error('没有找到 Main 方法');
+        const mainJs = translateStatements(mainBody ?? js);
 
         // 6. Translate other class code (methods already translated in extractAllClasses)
         // But we still need to translate statements inside method bodies that weren't handled
@@ -84,13 +117,15 @@ const CodeRunner = (function () {
         let codeWithoutInterfaces = code;
         const ifaceRegex = /\binterface\s+\w+\s*\{/g;
         let im;
-        while ((im = ifaceRegex.exec(codeWithoutInterfaces)) !== null) {
+        let declarationText = maskLiterals(codeWithoutInterfaces);
+        while ((im = ifaceRegex.exec(declarationText)) !== null) {
             const braceStart = im.index + im[0].length - 1;
             const braceEnd = findMatchingBrace(codeWithoutInterfaces, braceStart);
             if (braceEnd === -1) break;
             codeWithoutInterfaces =
                 codeWithoutInterfaces.substring(0, im.index) +
                 codeWithoutInterfaces.substring(braceEnd + 1);
+            declarationText = maskLiterals(codeWithoutInterfaces);
             ifaceRegex.lastIndex = im.index;
         }
 
@@ -103,21 +138,14 @@ const CodeRunner = (function () {
         const knownClasses = new Set();
         const classScanRegex = /\bclass\s+(\w+)/g;
         let scm;
-        while ((scm = classScanRegex.exec(codeWithoutInterfaces)) !== null) knownClasses.add(scm[1]);
+        while ((scm = classScanRegex.exec(declarationText)) !== null) knownClasses.add(scm[1]);
 
-        const classRegex = /\bclass\s+(\w+)(?:\s*:\s*(\w+))?\s*\{/g;
         let m;
-        // Collect all class names first (for field inheritance)
-        const allClassNames = [];
-        const classRegexForNames = /\bclass\s+(\w+)/g;
-        while ((m = classRegexForNames.exec(codeWithoutInterfaces)) !== null) {
-            allClassNames.push(m[1]);
-        }
 
         // Parse each class, collect its fields
         const classFields = {}; // className → [field names]
         const classRegex2 = /\bclass\s+(\w+)(?:\s*:\s*(\w+))?\s*\{/g;
-        while ((m = classRegex2.exec(codeWithoutInterfaces)) !== null) {
+        while ((m = classRegex2.exec(declarationText)) !== null) {
             const className = m[1];
             let baseClass = m[2] || null;
             // If base is not a known class, it's an interface — strip it
@@ -134,7 +162,7 @@ const CodeRunner = (function () {
 
         // Now actually translate each class
         const classRegex3 = /\bclass\s+(\w+)(?:\s*:\s*(\w+))?\s*\{/g;
-        while ((m = classRegex3.exec(codeWithoutInterfaces)) !== null) {
+        while ((m = classRegex3.exec(declarationText)) !== null) {
             const className = m[1];
             let baseClass = m[2] || null;
             if (baseClass && !knownClasses.has(baseClass)) baseClass = null;
@@ -153,7 +181,7 @@ const CodeRunner = (function () {
                 curClass = classFields[curClass].base;
             }
 
-            const isProgram = className === 'Program';
+            const isProgram = /\bstatic\s+(?:void|int)\s+Main\s*\(/.test(maskLiterals(body));
             const result = parseClassBody(body, className, baseClass, isProgram, accessibleFields);
             blocks.push(result);
             classRegex3.lastIndex = braceEnd + 1;
@@ -176,7 +204,8 @@ const CodeRunner = (function () {
         const methodRegex = /(?:public|private|protected|static)?\s*(?:virtual|override|abstract)?\s*(?:public|private|protected|static)?\s*(int|double|string|void|bool|char)\s+(\w+)\s*\(([^)]*)\)\s*\{/g;
         let m;
         const methods = [];
-        while ((m = methodRegex.exec(stripped)) !== null) {
+        const declarations = maskLiterals(stripped);
+        while ((m = methodRegex.exec(declarations)) !== null) {
             const methodName = m[2];
             const params = m[3];
             const braceStart = m.index + m[0].length - 1;
@@ -192,7 +221,7 @@ const CodeRunner = (function () {
             if (isProgram && methodName === 'Main') {
                 mainBody = methodBody;
             } else {
-                methods.push({ name: methodName, params: jsParams, body: translateStatements(methodBody) });
+                methods.push({ name: methodName, params: jsParams, body: translateStatements(methodBody, params) });
             }
             methodRegex.lastIndex = braceEnd + 1;
         }
@@ -202,17 +231,17 @@ const CodeRunner = (function () {
         let ctorMatch;
         let ctorBody = '';
         let ctorParams = '';
-        while ((ctorMatch = ctorRegex2.exec(stripped)) !== null) {
-            ctorParams = ctorMatch[1];
+        while ((ctorMatch = ctorRegex2.exec(declarations)) !== null) {
+            const typedParams = ctorMatch[1];
             const braceStart = ctorMatch.index + ctorMatch[0].length - 1;
             const braceEnd = findMatchingBrace(stripped, braceStart);
             if (braceEnd === -1) continue;
             ctorBody = stripped.substring(braceStart + 1, braceEnd);
-            ctorParams = ctorParams.split(',')
+            ctorParams = typedParams.split(',')
                 .map(p => p.trim().replace(/^(?:int|double|string|bool|char)\s+/, '').trim())
                 .filter(p => p.length > 0)
                 .join(', ');
-            ctorBody = translateStatements(ctorBody);
+            ctorBody = translateStatements(ctorBody, typedParams);
             ctorRegex2.lastIndex = braceEnd + 1;
         }
 
@@ -264,8 +293,21 @@ const CodeRunner = (function () {
     }
 
     // ===== Statement Translation =====
-    function translateStatements(code) {
-        let js = code;
+    function translateStatements(code, parameters = '', inheritedTypes = new Map()) {
+        const literals = [];
+        let js = '';
+        for (let i = 0; i < code.length;) {
+            const end = literalEnd(code, i);
+            if (end === i) { js += code[i++]; continue; }
+            js += `\uE000${literals.length}\uE001`;
+            literals.push(code.slice(i, end));
+            i = end;
+        }
+        const types = new Map(inheritedTypes);
+        for (const [, type, name, initial] of `${parameters};${js}`.matchAll(/\b(int|double|string|bool|char|var|float)\s+([A-Za-z_]\w*)(?:\s*=\s*([^;\n]+))?/g)) {
+            types.set(name, type === 'var' ? numericType(initial?.trim() ?? '', types) : type);
+            for (const [, next] of (initial ?? '').matchAll(/,\s*([A-Za-z_]\w*)\s*=/g)) types.set(next, type);
+        }
 
         // const int X = val; → const X = val;
         js = js.replace(/\bconst\s+(?:int|double|string|bool|char)\s+(\w+)\s*=/g, 'const $1 =');
@@ -289,8 +331,10 @@ const CodeRunner = (function () {
         // Array initializer closing } → ] (find balanced)
         js = convertArrayInitClosing(js);
         // new int[n] / new Student[n] → new Array(n)
-        js = js.replace(/\bnew\s+(?:int|double|string|bool|char)\[\s*(\w+)\s*\]/g, 'new Array($1)');
-        js = js.replace(/\bnew\s+([A-Z]\w*)\[\s*(\w+)\s*\]/g, 'new Array($2)');
+        js = js.replace(/\bnew\s+(int|double|string|bool|char|[A-Z]\w*)\[\s*(\w+)\s*\]/g, (_, type, length) => {
+            const value = { int: '0', double: '0', bool: 'false', char: '"\\0"' }[type] ?? 'null';
+            return `new Array(${length}).fill(${value})`;
+        });
 
         // foreach → for...of (支持基本类型和自定义类型)
         js = js.replace(/\bforeach\s*\(\s*(?:int|double|string|bool|char|[A-Z]\w*)\s+(\w+)\s+in\s+(\w+)\s*\)/g,
@@ -308,47 +352,28 @@ const CodeRunner = (function () {
         js = js.replace(/\.ToUpper\(\)/g, '.toUpperCase()');
         js = js.replace(/\.ToLower\(\)/g, '.toLowerCase()');
         js = js.replace(/\.Contains\(/g, '.includes(');
-        js = js.replace(/\.Replace\(/g, '.replace(');
+        js = js.replace(/([A-Za-z_]\w*|\uE000\d+\uE001)((?:\.(?:toUpperCase|toLowerCase)\(\))*)\.Replace\s*\(\s*([^,()]+),\s*([^()]+)\)/g, '__replace($1$2, $3, $4)');
+        js = js.replace(/\.Replace\(/g, '.replaceAll(');
         js = js.replace(/\.Substring\(\s*(\w+)\s*,\s*(\w+)\s*\)/g, '.slice($1, $1 + $2)');
         js = js.replace(/\.Length\b/g, '.length');
-        // Split: s.Split(',') → s.split(',')
-        js = js.replace(/\.Split\s*\(\s*'([^']+)'\s*\)/g, ".split('$1')");
-        js = js.replace(/\.Split\s*\(\s*"([^"]+)"\s*\)/g, '.split("$1")');
-        // string.Join(sep, arr) → arr.join(sep)
-        js = js.replace(/string\.Join\s*\(\s*"([^"]*)"\s*,\s*(\w+)\s*\)/g, '$2.join("$1")');
-        js = js.replace(/string\.Join\s*\(\s*'([^']*)'\s*,\s*(\w+)\s*\)/g, "$2.join('$1')");
+        js = js.replace(/\.Split\s*\(/g, '.split(');
+        js = js.replace(/\bstring\.Join\s*\(/g, '__join(');
 
-        // int.Parse(x) → parseInt(x)
-        js = js.replace(/\bint\.Parse\s*\(/g, 'parseInt(');
-        js = js.replace(/\bdouble\.Parse\s*\(/g, 'parseFloat(');
+        js = js.replace(/\bint\.Parse\s*\(/g, '__parseInt(');
+        js = js.replace(/\bdouble\.Parse\s*\(/g, '__parseDouble(');
 
         // .ToString() → .toString()
         js = js.replace(/\.ToString\(\)/g, '.toString()');
 
-        // String interpolation $"..." → `...`
-        js = convertInterpolatedStrings(js);
-
-        // Console.WriteLine / Write / ReadLine
-        js = replaceConsoleCalls(js);
+        js = js.replace(/\bConsole\s*\.\s*(WriteLine|Write|ReadLine)\s*(?=\()/g, (_, method) => ({
+            WriteLine: '__out', Write: '__outNoNl', ReadLine: '__readline'
+        })[method]);
 
         // virtual/override 关键字：模拟器用 JS 原生方法分派，直接去掉这两个修饰符
         js = js.replace(/\bvirtual\s+/g, '');
         js = js.replace(/\boverride\s+/g, '');
 
-        // 整数除法：C# 中 int / int 截断小数。收集由整数字面量初始化的变量，
-        // 把这类变量之间的除法包一层 Math.trunc 以模拟截断语义。
-        // 启发式：匹配 `let X = <整数>` 或 `let X = <整数 op 整数>` 等模式。
-        const intVars = new Set();
-        // Match `let X = <digits>` or `let X = <digits> op <digits>` etc.
-        js.replace(/\blet\s+(\w+)\s*=\s*(\d+(?:\s*[-+*/%]\s*\d+)*)\s*;/g, (match, name) => { intVars.add(name); return ''; });
-        // Also handle `int a = 100, b = 7;` style — already converted to `let a = 100, b = 7;`
-        js.replace(/\blet\s+(\w+)\s*=\s*\d+\s*,\s*(\w+)\s*=\s*\d+/g, (match, n1, n2) => { intVars.add(n1); intVars.add(n2); return ''; });
-        // If we have int vars, wrap `intVar / intVar` with Math.trunc
-        if (intVars.size > 0) {
-            const varList = Array.from(intVars).join('|');
-            const intDivRegex = new RegExp('\\b(' + varList + ')\\s*/\\s*(' + varList + ')\\b', 'g');
-            js = js.replace(intDivRegex, 'Math.trunc($1 / $2)');
-        }
+        js = translateDivision(js, types);
 
         // Object initializer: new Student { Name = "x", Score = 85 }
         // → (() => { const __o = new Student(); __o.Name = "x"; __o.Score = 85; return __o; })()
@@ -364,7 +389,36 @@ const CodeRunner = (function () {
             return `(()=>{const __o=new ${cls}();${stmts} return __o;})()`;
         });
 
-        return js;
+        return js.replace(/\uE000(\d+)\uE001/g, (_, index) => {
+            const literal = literals[index];
+            return literal.startsWith('$"') ? translateInterpolation(literal, types) : literal;
+        });
+    }
+
+    function numericType(operand, types) {
+        if (/^[+-]?\d+$/.test(operand)) return 'int';
+        if (/^[+-]?(?:\d+\.\d*|\.\d+|\d+[eE][+-]?\d+)$/.test(operand)) return 'double';
+        return types.get(operand.replace(/^[+-]/, ''));
+    }
+
+    function translateDivision(code, types) {
+        const operand = '(?:[A-Za-z_]\\w*|\\d+(?:\\.\\d*)?(?:[eE][+-]?\\d+)?)';
+        const chain = new RegExp(`(?<![\\w.$\\uE000])${operand}(?:\\s*[*/%]\\s*[+-]?${operand})+(?![\\w.$\\uE001])`, 'g');
+        return code.replace(chain, expression => {
+            if (!expression.includes('/')) return expression;
+            const tokens = expression.replace(/\s+/g, '').split(/([*/%])/);
+            let combined = tokens[0];
+            let type = numericType(combined, types);
+            for (let i = 1; i < tokens.length; i += 2) {
+                const operator = tokens[i], right = tokens[i + 1];
+                const rightType = numericType(right, types);
+                if (!['int', 'double', 'float'].includes(type) || !['int', 'double', 'float'].includes(rightType)) return expression;
+                const bothIntegers = type === 'int' && rightType === 'int';
+                combined = operator === '/' && bothIntegers ? `__intDiv(${combined}, ${right})` : `(${combined} ${operator} ${right})`;
+                type = bothIntegers ? 'int' : 'double';
+            }
+            return combined;
+        });
     }
 
     /**
@@ -426,153 +480,105 @@ const CodeRunner = (function () {
         return result;
     }
 
-    // ===== String Interpolation =====
-    function convertInterpolatedStrings(code) {
+    function maskLiterals(code) {
         let result = '';
-        let i = 0;
-        while (i < code.length) {
-            if (code[i] === '$' && code[i + 1] === '"') {
-                let j = i + 2, inner = '', braceDepth = 0;
-                while (j < code.length) {
-                    const c = code[j];
-                    if (c === '\\' && j + 1 < code.length) { inner += c + code[j+1]; j += 2; continue; }
-                    if (c === '{') { braceDepth++; inner += c; j++; continue; }
-                    if (c === '}') { braceDepth--; inner += c; j++; continue; }
-                    if (braceDepth > 0 && (c === '"' || c === '\'')) {
-                        const q = c; inner += c; j++;
-                        while (j < code.length && code[j] !== q) {
-                            if (code[j] === '\\' && j+1 < code.length) { inner += code[j]+code[j+1]; j+=2; continue; }
-                            inner += code[j]; j++;
-                        }
-                        if (j < code.length) { inner += code[j]; j++; }
-                        continue;
-                    }
-                    if (c === '"' && braceDepth === 0) break;
-                    inner += c; j++;
-                }
-                const converted = convertInterpolationBody(inner);
-                result += '`' + converted + '`';
-                i = j + 1; continue;
-            }
-            if (code[i] === '"') {
-                let j = i + 1, inner = '';
-                while (j < code.length) {
-                    if (code[j] === '\\' && j+1 < code.length) { inner += code[j]+code[j+1]; j+=2; continue; }
-                    if (code[j] === '"') break;
-                    inner += code[j]; j++;
-                }
-                result += '"' + inner + '"';
-                i = j + 1; continue;
-            }
-            result += code[i]; i++;
+        for (let i = 0; i < code.length;) {
+            const end = literalEnd(code, i);
+            if (end === i) { result += code[i++]; continue; }
+            result += code.slice(i, end).replace(/[^\n]/g, ' ');
+            i = end;
         }
         return result;
     }
 
-    function convertInterpolationBody(inner) {
-        let out = '', i = 0, braceDepth = 0, buf = '';
-        while (i < inner.length) {
-            const c = inner[i];
-            if (c === '\\' && i+1 < inner.length) { buf += c + inner[i+1]; i+=2; continue; }
-            if (c === '"' || c === '\'') {
-                const q = c; buf += c; i++;
-                while (i < inner.length && inner[i] !== q) {
-                    if (inner[i] === '\\' && i+1 < inner.length) { buf += inner[i]+inner[i+1]; i+=2; continue; }
-                    buf += inner[i]; i++;
-                }
-                if (i < inner.length) { buf += inner[i]; i++; }
-                continue;
+    function literalEnd(code, start) {
+        const interpolated = code[start] === '$' && code[start + 1] === '"';
+        const quoteStart = start + Number(interpolated);
+        const quote = code[quoteStart];
+        if (quote !== '"' && quote !== "'") return start;
+        for (let i = quoteStart + 1; i < code.length; i++) {
+            if (code[i] === '\\') { i++; continue; }
+            if (code[i] === quote) return i + 1;
+            if (interpolated && code[i] === '{') {
+                if (code[i + 1] === '{') { i++; continue; }
+                const end = findMatchingBrace(code, i);
+                if (end < 0) break;
+                i = end;
             }
-            if (c === '{') {
-                braceDepth++;
-                if (braceDepth === 1) { out += buf; buf = '$' + c; }
-                else buf += c;
-                i++; continue;
-            }
-            if (c === '}') {
-                braceDepth--;
-                buf += c;
-                if (braceDepth === 0) { out += buf; buf = ''; }
-                i++; continue;
-            }
-            buf += c; i++;
         }
-        out += buf;
-        return out;
+        throw new Error('字符串缺少结束引号或插值括号');
     }
 
-    // ===== Console Call Replacement =====
-    function replaceConsoleCalls(code) {
-        let result = '', i = 0;
-        while (i < code.length) {
-            if (code[i] === '"' || code[i] === '`' || code[i] === '\'') {
-                const q = code[i]; result += code[i++];
-                while (i < code.length && code[i] !== q) {
-                    if (code[i] === '\\' && i+1 < code.length) { result += code[i]+code[i+1]; i+=2; continue; }
-                    result += code[i++];
-                }
-                if (i < code.length) result += code[i++];
-                continue;
+    function translateInterpolation(literal, types) {
+        const text = literal.slice(2, -1);
+        let result = '';
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            const next = text[i + 1];
+            if (char === '\\') {
+                result += char + next;
+                i++;
+            } else if ((char === '{' || char === '}') && next === char) {
+                result += char === '{' && text[i - 1] === '$' ? '\\{' : char;
+                i++;
+            } else if (char === '{') {
+                const end = findMatchingBrace(text, i);
+                if (end < 0) throw new Error('插值表达式缺少右括号');
+                const expression = translateStatements(text.slice(i + 1, end), '', types);
+                result += '${__format(' + expression + ')}';
+                i = end;
+            } else {
+                result += char === '`' ? '\\`' : char;
             }
-            // Console.WriteLine( 共 18 字符 — 必须先匹配（前缀包含 Console.Write）
-            if (code.substr(i, 18) === 'Console.WriteLine(') {
-                const ps = i + 17, end = findMatchingParen(code, ps);
-                if (end === -1) { result += code[i]; i++; continue; }
-                result += `__out(${code.substring(ps+1, end)})`;
-                i = end + 1; continue;
-            }
-            // Console.Write( 共 14 字符
-            if (code.substr(i, 14) === 'Console.Write(') {
-                const ps = i + 13, end = findMatchingParen(code, ps);
-                if (end === -1) { result += code[i]; i++; continue; }
-                result += `__outNoNl(${code.substring(ps+1, end)})`;
-                i = end + 1; continue;
-            }
-            // Console.ReadLine() → __readline()  (18 chars)
-            if (code.substr(i, 18) === 'Console.ReadLine()') {
-                result += '__readline()';
-                i += 18; continue;
-            }
-            result += code[i++];
         }
-        return result;
+        return '`' + result + '`';
     }
 
-    // ===== Utilities =====
-    function stripComments(code) {
-        let result = '', i = 0, inStr = false, qch = '';
-        while (i < code.length) {
-            const c = code[i], next = code[i+1];
-            if (inStr) {
-                result += c;
-                if (c === '\\' && i+1 < code.length) { result += code[i+1]; i+=2; continue; }
-                if (c === qch) inStr = false;
-                i++; continue;
+    function stripComments(code, onComment = () => {}) {
+        let result = '';
+        for (let i = 0; i < code.length;) {
+            const end = literalEnd(code, i);
+            if (end !== i) {
+                result += code.slice(i, end);
+                i = end;
+                continue;
             }
-            if (c === '"' || c === '\'') { inStr = true; qch = c; result += c; i++; continue; }
-            if (c === '/' && next === '/') { while (i < code.length && code[i] !== '\n') i++; continue; }
-            if (c === '/' && next === '*') { i+=2; while (i < code.length && !(code[i]==='*'&&code[i+1]==='/')) i++; i+=2; continue; }
-            result += c; i++;
+            if (code.startsWith('//', i)) {
+                const newline = code.indexOf('\n', i);
+                const end = newline < 0 ? code.length : newline;
+                onComment(code.slice(i + 2, end));
+                i = end;
+            } else if (code.startsWith('/*', i)) {
+                const closing = code.indexOf('*/', i + 2);
+                if (closing < 0) throw new Error('块注释缺少结束符 */');
+                const comment = code.slice(i + 2, closing);
+                onComment(comment);
+                result += ' ' + comment.replace(/[^\n]/g, '');
+                i = closing + 2;
+            } else {
+                result += code[i++];
+            }
         }
         return result;
     }
 
     function findMatchingBrace(code, start) {
-        let d = 0;
-        for (let i = start; i < code.length; i++) {
-            if (code[i] === '{') d++;
-            else if (code[i] === '}') { d--; if (d === 0) return i; }
+        let depth = 0;
+        for (let i = start; i < code.length;) {
+            const end = literalEnd(code, i);
+            if (end !== i) { i = end; continue; }
+            if (code[i] === '{') depth++;
+            else if (code[i] === '}' && --depth === 0) return i;
+            i++;
         }
         return -1;
     }
 
-    function findMatchingParen(code, start) {
-        let d = 0;
-        for (let i = start; i < code.length; i++) {
-            if (code[i] === '(') d++;
-            else if (code[i] === ')') { d--; if (d === 0) return i; }
-        }
-        return -1;
+    function hasComment(code) {
+        let found = false;
+        try { stripComments(code, comment => { found ||= Boolean(comment.trim()); }); }
+        catch { return false; }
+        return found;
     }
 
     function checkOutput(actual, expected) {
@@ -586,5 +592,62 @@ const CodeRunner = (function () {
         return n(actual) === n(expected);
     }
 
-    return { run, checkOutput };
+    return { run, checkOutput, hasComment };
+}
+
+const CodeRunner = (() => {
+    const simulator = createSimulator();
+
+    function frameRunner(source) {
+        window.addEventListener('message', event => {
+            if (event.source !== parent || event.data?.type !== 'run') return;
+            const send = result => parent.postMessage({ type: 'result', result }, '*');
+            try {
+                const url = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+                const worker = new Worker(url);
+                worker.addEventListener('message', ({ data }) => send(data), { once: true });
+                worker.addEventListener('error', () => send({ status: 'error', output: '运行器启动失败' }), { once: true });
+                worker.postMessage(event.data.request);
+            } catch {
+                send({ status: 'error', output: '此浏览器无法启动隔离运行器' });
+            }
+        });
+        parent.postMessage({ type: 'ready' }, '*');
+    }
+
+    function run(code, inputs = [], { signal } = {}) {
+        if (typeof document === 'undefined') return simulator.run(code, inputs);
+        if (signal?.aborted) return Promise.resolve({ status: 'cancelled', output: '' });
+        const source = `const simulator = (${createSimulator})(); self.onmessage = async ({data}) => postMessage(await simulator.run(data.code, data.inputs));`;
+        const frame = document.createElement('iframe');
+        frame.hidden = true;
+        frame.title = '代码运行器';
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.srcdoc = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; worker-src blob:"><script>(${frameRunner})(${JSON.stringify(source).replaceAll('<', '\\u003c')});<\/script>`;
+
+        return new Promise(resolve => {
+            function finish(result) {
+                clearTimeout(timer);
+                window.removeEventListener('message', onMessage);
+                signal?.removeEventListener('abort', onAbort);
+                frame.remove();
+                resolve(result);
+            }
+
+            function onMessage(event) {
+                if (event.source !== frame.contentWindow) return;
+                if (event.data?.type === 'ready') frame.contentWindow.postMessage({ type: 'run', request: { code, inputs } }, '*');
+                if (event.data?.type === 'result') finish(event.data.result);
+            }
+
+            function onAbort() { finish({ status: 'cancelled', output: '' }); }
+
+            const timer = setTimeout(() => finish({ status: 'error', output: '运行超时，请检查循环和递归的结束条件。' }), 3_000);
+            window.addEventListener('message', onMessage);
+            signal?.addEventListener('abort', onAbort, { once: true });
+            document.body.append(frame);
+        });
+    }
+
+    return { run, checkOutput: simulator.checkOutput, hasComment: simulator.hasComment };
 })();
