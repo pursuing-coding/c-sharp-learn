@@ -25,6 +25,7 @@
     let toastTimer;
     let focusOpener;
     let storageNoticeShown = false;
+    let loadedSource;
     let resetAt = Storage.load().resetAt;
 
     function currentLesson() {
@@ -55,7 +56,12 @@
     }
 
     function saveDraft(view) {
-        if (Storage.saveCode(currentLesson().id, view.editor.value) || storageNoticeShown) return;
+        if (Storage.load().resetAt !== resetAt) {
+            syncStoredProgress();
+            return;
+        }
+        loadedSource = view.editor.value;
+        if (Storage.saveCode(currentLesson().id, loadedSource) || storageNoticeShown) return;
         storageNoticeShown = true;
         showToast('浏览器存储当前不可用，本次编辑只在此页面保留。', 'warn');
     }
@@ -148,7 +154,8 @@
         $('stepIndicator').textContent = `${index + 1}/${allLessons.length}`;
         tutorial.innerHTML = lesson.content;
         tutorial.scrollTop = 0;
-        main.editor.value = Storage.getCode(lesson.id) ?? lesson.starterCode;
+        loadedSource = Storage.getCode(lesson.id) ?? lesson.starterCode;
+        main.editor.value = loadedSource;
         showOutput(main, '');
         setStatus(main);
         closeAnswer();
@@ -205,13 +212,18 @@
             cancelRun({ announce: true });
             return;
         }
+        const lesson = currentLesson();
         const code = view.editor.value;
+        const stored = Storage.load();
+        if (stored.resetAt !== resetAt || (stored.codeHistory[lesson.id] ?? lesson.starterCode) !== loadedSource) {
+            syncStoredProgress();
+            return;
+        }
         if (!code.trim()) {
             setStatus(view, '请先输入代码', 'err');
             return;
         }
         cancelRun();
-        const lesson = currentLesson();
         const controller = new AbortController();
         const session = { view, controller };
         activeRun = session;
@@ -243,7 +255,12 @@
             }
 
             const note = await grade(lesson, code, result, inputs, signal);
-            if (signal.aborted || activeRun !== session || Storage.load().resetAt !== resetAt) return;
+            if (signal.aborted || activeRun !== session) return;
+            const latest = Storage.load();
+            if (latest.resetAt !== resetAt || (latest.codeHistory[lesson.id] ?? lesson.starterCode) !== code) {
+                syncStoredProgress();
+                return;
+            }
             if (note) {
                 setStatus(view, note, 'err');
                 return;
@@ -409,16 +426,30 @@
             if (event.key === 'ArrowRight') loadLesson(currentIndex + 1);
         }
     });
-    window.addEventListener('storage', event => {
-        if (event.key !== Storage.key && event.key !== null) return;
-        const latestReset = Storage.load().resetAt;
-        if (latestReset !== resetAt || !isUnlocked(currentIndex)) {
-            resetAt = latestReset;
+    function syncStoredProgress() {
+        const latest = Storage.load();
+        if (latest.resetAt !== resetAt || !isUnlocked(currentIndex, new Set(latest.completedLessons))) {
+            resetAt = latest.resetAt;
             closeFocus();
             loadLesson(0);
-        } else {
-            renderProgress();
+            return;
         }
+        const lesson = currentLesson();
+        const source = latest.codeHistory[lesson.id] ?? lesson.starterCode;
+        if (source !== loadedSource) {
+            cancelRun();
+            loadedSource = source;
+            main.editor.value = source;
+            focus.editor.value = source;
+            const view = dialog.open ? focus : main;
+            showOutput(view, '');
+            setStatus(view, '草稿已从其他页面更新');
+        }
+        renderProgress();
+    }
+
+    window.addEventListener('storage', event => {
+        if (event.key === Storage.key || event.key === null) syncStoredProgress();
     });
 
     let theme;
