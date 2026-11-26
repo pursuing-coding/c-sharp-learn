@@ -2,6 +2,8 @@
 /* Dark: 深邃紫调 | Light: 清爽靛蓝 */
 
 :root {
+    color-scheme: light;
+
     /* ---- Dark Theme ---- */
     --d-bg0:    #0c0e16;
     --d-bg1:    #12141f;
@@ -55,8 +57,9 @@
     --l-glow:   0 0 20px rgba(99,80,232,0.08);
 }
 
-/* Default: dark */
-body {
+:root[data-theme="dark"] { color-scheme: dark; }
+
+[data-theme="dark"] body {
     --bg0:var(--d-bg0);--bg1:var(--d-bg1);--bg2:var(--d-bg2);--bg3:var(--d-bg3);
     --border:var(--d-border);--text:var(--d-text);--text2:var(--d-text2);--text3:var(--d-text3);
     --accent:var(--d-accent);--accent2:var(--d-accent2);--green:var(--d-green);--green2:var(--d-green2);
@@ -64,7 +67,7 @@ body {
     --orange:var(--d-orange);--code-bg:var(--d-code-bg);--editor:var(--d-editor);--edtxt:var(--d-edtxt);
     --side:var(--d-side);--top:var(--d-top);--shadow:var(--d-shadow);--glow:var(--d-glow);
 }
-[data-theme="light"] body {
+body {
     --bg0:var(--l-bg0);--bg1:var(--l-bg1);--bg2:var(--l-bg2);--bg3:var(--l-bg3);
     --border:var(--l-border);--text:var(--l-text);--text2:var(--l-text2);--text3:var(--l-text3);
     --accent:var(--l-accent);--accent2:var(--l-accent2);--green:var(--l-green);--green2:var(--l-green2);

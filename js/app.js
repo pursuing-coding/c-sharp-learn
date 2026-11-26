@@ -44,7 +44,7 @@
     }
 
     function applyTheme(theme) {
-        const value = theme === 'light' ? 'light' : 'dark';
+        const value = theme === 'dark' ? 'dark' : 'light';
         document.documentElement.dataset.theme = value;
         $('btnTheme').setAttribute('aria-pressed', String(value === 'light'));
     }
@@ -452,9 +452,7 @@
         if (event.key === Storage.key || event.key === null) syncStoredProgress();
     });
 
-    let theme;
-    try { theme = localStorage.getItem('csharp_theme'); } catch {}
-    applyTheme(theme);
+    applyTheme(document.documentElement.dataset.theme);
     const savedIndex = allLessons.findIndex(item => item.id === Storage.load().lastLessonId);
     if (!loadLesson(savedIndex)) loadLesson(0);
 })();
