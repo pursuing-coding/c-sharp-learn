@@ -1,11 +1,18 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="C# 闯关式学习平台，从零基础到独立开发">
     <title>C# 闯关</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%235b4cdb'/><text x='5' y='23' font-size='20' font-weight='800' fill='white'>C#</text></svg>">
+    <script>
+        try {
+            if (localStorage.getItem('csharp_theme') === 'dark') {
+                document.documentElement.dataset.theme = 'dark';
+            }
+        } catch {}
+    </script>
     <link rel="stylesheet" href="styles/main.css">
 </head>
 <body>
